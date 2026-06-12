@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResearchHook",
+  "description": "Output contract for prompts/02-research-hook.md. found=false with empty hook is a valid, expected outcome.",
+  "type": "object",
+  "properties": {
+    "found": {
+      "type": "boolean",
+      "description": "Whether a qualifying hook was found. Never fabricate to make this true."
+    },
+    "hook": {
+      "type": "string",
+      "description": "The specific, recent, named detail usable as a cold-email opener. Empty string when found=false."
+    },
+    "hook_quality": {
+      "type": "integer",
+      "description": "1-5. 5 = recent + named + unique to this company; 3 = could fit a handful of competitors; 1 = nothing found. Gate: >= 4 gets a personalized first line."
+    },
+    "summary": {
+      "type": "string",
+      "description": "1-2 sentences on what the business does, for the operator review screen."
+    },
+    "facts": {
+      "type": "array",
+      "description": "Each verifiable fact gathered, with its source.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "fact": { "type": "string" },
+          "source_url": { "type": "string" }
+        },
+        "required": ["fact", "source_url"],
+        "additionalProperties": false
+      }
+    },
+    "source_urls": {
+      "type": "array",
+      "description": "All URLs visited that support the hook. A hook with no source URL must not be used.",
+      "items": { "type": "string" }
+    },
+    "confidence": {
+      "type": "number",
+      "description": "0-1; certainty that the fact is current and correctly attributed."
+    }
+  },
+  "required": [
+    "found",
+    "hook",
+    "hook_quality",
+    "summary",
+    "facts",
+    "source_urls",
+    "confidence"
+  ],
+  "additionalProperties": false
+}

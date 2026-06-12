@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewerVerdict",
+  "description": "Output contract for prompts/04-reviewer-judge.md. Routing: pass + confidence > 0.9 proceed; 0.6-0.9 proceed + flag; < 0.6 or fail block + escalate. Max 2 automatic revision retries.",
+  "type": "object",
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["pass", "fail", "revise"],
+      "description": "fail = hallucination, banned claim, or compliance issue. revise = fixable voice/quality issue."
+    },
+    "confidence": {
+      "type": "number",
+      "description": "0-1 certainty in the verdict."
+    },
+    "reason": {
+      "type": "string",
+      "description": "The specific sentence and the specific rule, e.g. 'references a 40% booking increase that appears nowhere in the source data'."
+    },
+    "suggested_action": {
+      "type": "string",
+      "enum": ["send", "revise", "block", "escalate_human"]
+    },
+    "checks": {
+      "type": "object",
+      "description": "Per-category result, for tracking failure types over time.",
+      "properties": {
+        "faithfulness": { "type": "boolean" },
+        "banned_claims": { "type": "boolean" },
+        "compliance": { "type": "boolean" },
+        "brand_voice": { "type": "boolean" },
+        "quality": { "type": "boolean" }
+      },
+      "required": ["faithfulness", "banned_claims", "compliance", "brand_voice", "quality"],
+      "additionalProperties": false
+    },
+    "unsupported_claims": {
+      "type": "array",
+      "description": "Claims found in the draft with no source in the input data (empty when faithfulness passes).",
+      "items": { "type": "string" }
+    },
+    "revision_instructions": {
+      "type": ["string", "null"],
+      "description": "Concrete fix for the writer when verdict=revise; null otherwise."
+    }
+  },
+  "required": [
+    "verdict",
+    "confidence",
+    "reason",
+    "suggested_action",
+    "checks",
+    "unsupported_claims",
+    "revision_instructions"
+  ],
+  "additionalProperties": false
+}

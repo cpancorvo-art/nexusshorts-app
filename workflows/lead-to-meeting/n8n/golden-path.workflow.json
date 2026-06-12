@@ -1,0 +1,457 @@
+{
+  "name": "Lead-to-Meeting — Golden Path (skeleton)",
+  "nodes": [
+    {
+      "id": "trigger-lead",
+      "name": "Lead In (from Clay)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-in",
+        "responseMode": "onReceived"
+      },
+      "notes": "Clay HTTP API / webhook pushes one enriched, email-verified lead row per call. Skip rows that failed email verification in Clay — never send to unverified addresses."
+    },
+    {
+      "id": "score-lead",
+      "name": "Score Lead (Claude Haiku)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-haiku-4-5', max_tokens: 1024, system: $vars.PROMPT_LEAD_SCORING, messages: [{ role: 'user', content: '<icp_rubric>' + $vars.CLIENT_ICP_RUBRIC + '</icp_rubric>\\n<lead_record>' + JSON.stringify($json.body) + '</lead_record>\\nScore this lead against the rubric. Respond only with JSON.' }], output_config: { format: { type: 'json_schema', schema: $vars.SCHEMA_LEAD_SCORE } } }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": { "name": "Anthropic API (x-api-key)" }
+      },
+      "notes": "Prompt: prompts/01-lead-scoring.md. Schema: schemas/lead-score.schema.json (store both in n8n Variables or load from repo). Structured outputs guarantee the response shape."
+    },
+    {
+      "id": "gate-score",
+      "name": "Gate: score >= 60 & not disqualified",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [440, 0],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "strict", "version": 2 },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ JSON.parse($json.content[0].text).score }}",
+              "rightValue": 60,
+              "operator": { "type": "number", "operation": "gte" }
+            },
+            {
+              "leftValue": "={{ JSON.parse($json.content[0].text).disqualified }}",
+              "rightValue": false,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "notes": "False branch → Save Rejected Lead. Filtering BEFORE further enrichment/research keeps Clay credit + token spend on qualified leads only."
+    },
+    {
+      "id": "save-rejected",
+      "name": "Save Rejected Lead",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [660, 180],
+      "parameters": {
+        "operation": "update",
+        "tableId": "leads"
+      },
+      "notes": "status='rejected', persist score + reasoning for the audit trail."
+    },
+    {
+      "id": "research-hook",
+      "name": "Research Hook (Claygent or fetch+Claude)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 2048, system: $vars.PROMPT_RESEARCH_HOOK, tools: [{ type: 'web_fetch_20260209', name: 'web_fetch' }], messages: [{ role: 'user', content: 'Company: ' + $json.company_name + ' — ' + $json.website_url }], output_config: { format: { type: 'json_schema', schema: $vars.SCHEMA_RESEARCH_HOOK } } }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": { "name": "Anthropic API (x-api-key)" }
+      },
+      "notes": "If using Claygent for this step instead, run it in Clay before the webhook and pass the hook JSON through. Prompt: prompts/02-research-hook.md."
+    },
+    {
+      "id": "fetch-kb",
+      "name": "Retrieve Client KB (Supabase kb_search)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [880, 0],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "kb_chunks"
+      },
+      "notes": "Call the kb_search() hybrid-retrieval function (RPC) with the lead's segment/topic to pull offer, voice rules, segment opener, and few-shot example emails."
+    },
+    {
+      "id": "draft-email",
+      "name": "Draft Email (Claude Sonnet — writer)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1024, system: [{ type: 'text', text: $vars.PROMPT_EMAIL_DRAFT, cache_control: { type: 'ephemeral' } }], messages: [{ role: 'user', content: '<verified_fields>' + JSON.stringify($json.lead) + JSON.stringify($json.hook) + '</verified_fields>\\n<client_knowledge>' + $json.kb_chunks + '</client_knowledge>\\nWrite the email. Respond only with JSON.' }], output_config: { format: { type: 'json_schema', schema: $vars.SCHEMA_EMAIL_DRAFT } } }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": { "name": "Anthropic API (x-api-key)" }
+      },
+      "notes": "Prompt: prompts/03-email-draft.md. System prompt + KB are stable per client — cache_control keeps cached input at ~10% price."
+    },
+    {
+      "id": "deterministic-checks",
+      "name": "Deterministic Checks (blocklist, length)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 0],
+      "parameters": {
+        "jsCode": "// Free, exact checks run BEFORE the LLM judge.\nconst draft = JSON.parse($input.first().json.content[0].text);\nconst BLOCKLIST = ['guarantee', 'free money', 'act now', 'limited time', 'risk-free'];\nconst words = draft.body.trim().split(/\\s+/).length;\nconst failures = [];\nif (words > 120) failures.push(`body ${words} words (max 120)`);\nfor (const term of BLOCKLIST) {\n  if (draft.body.toLowerCase().includes(term) || draft.subject.toLowerCase().includes(term)) {\n    failures.push(`blocked term: ${term}`);\n  }\n}\nreturn [{ json: { draft, deterministic_pass: failures.length === 0, failures } }];"
+      }
+    },
+    {
+      "id": "judge",
+      "name": "Reviewer Judge (Claude Opus)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-opus-4-8', max_tokens: 2048, system: $vars.PROMPT_REVIEWER_JUDGE, messages: [{ role: 'user', content: '<source_data>' + JSON.stringify($json.source) + '</source_data>\\n<banned_claims>' + $vars.CLIENT_BANNED_CLAIMS + '</banned_claims>\\n<voice_rules>' + $vars.CLIENT_VOICE_RULES + '</voice_rules>\\n<draft>' + JSON.stringify($json.draft) + '</draft>\\nReview this draft. Respond only with JSON.' }], output_config: { format: { type: 'json_schema', schema: $vars.SCHEMA_REVIEWER_VERDICT } } }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": { "name": "Anthropic API (x-api-key)" }
+      },
+      "notes": "Prompt: prompts/04-reviewer-judge.md. A DIFFERENT model than the writer, on purpose. Routing: pass+conf>0.9 proceed; 0.6-0.9 proceed+flag; fail/<0.6 block. Revision loop (verdict='revise' → back to Draft Email with revision_instructions) capped at 2."
+    },
+    {
+      "id": "gate-verdict",
+      "name": "Gate: verdict",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1760, 0],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "pass",
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ JSON.parse($json.content[0].text).verdict }}",
+                    "rightValue": "pass",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              }
+            },
+            {
+              "outputKey": "revise",
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ JSON.parse($json.content[0].text).verdict }}",
+                    "rightValue": "revise",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              }
+            },
+            {
+              "outputKey": "fail",
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ JSON.parse($json.content[0].text).verdict }}",
+                    "rightValue": "fail",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "notes": "revise → back to Draft Email (cap retries at 2 via a counter on the item); fail → human escalation queue."
+    },
+    {
+      "id": "human-approval",
+      "name": "Human Approval Gate (Wait)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1980, 0],
+      "parameters": {
+        "resume": "webhook"
+      },
+      "notes": "MANDATORY while approval_mode='all'. Post the draft + verdict to Slack with Approve/Edit/Reject buttons that hit this node's resume webhook. Operator edits are saved to drafts.edited_body — they become the eval set. Move to sampling only when judge false-pass rate ≈ 0 on the planted-hallucination set AND manual edit rate < 10-20%."
+    },
+    {
+      "id": "send",
+      "name": "Push to Sequencer (Instantly)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2200, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.instantly.ai/api/v2/leads",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ campaign: $vars.INSTANTLY_CAMPAIGN_ID, email: $json.lead.email, first_name: $json.lead.contact_name, custom_variables: { subject: $json.draft.subject, body: $json.approved_body } }) }}"
+      },
+      "notes": "Smartlead for multi-client/agency workspaces. The sequencer appends the unsubscribe link + postal address (CAN-SPAM) and handles follow-up touches, warmed inboxes, 30-50 emails/inbox/day."
+    },
+    {
+      "id": "log-sent",
+      "name": "Log Event (Supabase)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2420, 0],
+      "parameters": {
+        "operation": "create",
+        "tableId": "lead_events"
+      },
+      "notes": "event_type='sent'. Every step in this chain should also log its event (scored, hook_found, drafted, judge_pass/fail, approved) — omitted here for skeleton brevity."
+    },
+
+    {
+      "id": "trigger-reply",
+      "name": "Reply In (from sequencer webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 420],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "reply-in",
+        "responseMode": "onReceived"
+      }
+    },
+    {
+      "id": "classify-reply",
+      "name": "Classify Reply (Claude Haiku)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 420],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-haiku-4-5', max_tokens: 1024, system: $vars.PROMPT_REPLY_CLASSIFICATION, messages: [{ role: 'user', content: '<outbound_thread>' + JSON.stringify($json.body.thread) + '</outbound_thread>\\n<inbound_reply>' + $json.body.reply_body + '</inbound_reply>\\nClassify this reply. Respond only with JSON.' }], output_config: { format: { type: 'json_schema', schema: $vars.SCHEMA_REPLY_INTENT } } }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": { "name": "Anthropic API (x-api-key)" }
+      },
+      "notes": "Prompt: prompts/05-reply-classification.md."
+    },
+    {
+      "id": "route-intent",
+      "name": "Route by Intent",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [440, 420],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "interested",
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ JSON.parse($json.content[0].text).intent }}",
+                    "rightValue": "interested",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              }
+            },
+            {
+              "outputKey": "unsubscribe_or_bounce",
+              "conditions": {
+                "combinator": "or",
+                "conditions": [
+                  {
+                    "leftValue": "={{ JSON.parse($json.content[0].text).intent }}",
+                    "rightValue": "unsubscribe",
+                    "operator": { "type": "string", "operation": "equals" }
+                  },
+                  {
+                    "leftValue": "={{ JSON.parse($json.content[0].text).intent }}",
+                    "rightValue": "bounce",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              }
+            },
+            {
+              "outputKey": "human_queue",
+              "conditions": {
+                "combinator": "or",
+                "conditions": [
+                  {
+                    "leftValue": "={{ JSON.parse($json.content[0].text).intent }}",
+                    "rightValue": "unclear",
+                    "operator": { "type": "string", "operation": "equals" }
+                  },
+                  {
+                    "leftValue": "={{ JSON.parse($json.content[0].text).confidence }}",
+                    "rightValue": 0.7,
+                    "operator": { "type": "number", "operation": "lt" }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "notes": "Full routing table in the README: interested → notify operator + Cal.com link (<2h SLA); referral → new lead (<24h); objection/info_request → typed nurture (<4h); out_of_office → pause + resume date; fallback output handles not_interested / meeting_booked / referral branches (add nodes per action)."
+    },
+    {
+      "id": "suppress",
+      "name": "Suppress Immediately",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [660, 540],
+      "parameters": {
+        "operation": "create",
+        "tableId": "suppression_list"
+      },
+      "notes": "CAN-SPAM: suppression is fully automated and immediate — it never waits for a human. Also call the sequencer's suppression/blocklist API in this branch so every inbox stops at once."
+    },
+    {
+      "id": "notify-operator",
+      "name": "Notify Operator (Slack)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [660, 300],
+      "parameters": {},
+      "notes": "interested → share Cal.com link, set CRM stage 'engaged', SLA < 2h. On meeting_booked: write meeting + full thread context to CRM."
+    }
+  ],
+  "connections": {
+    "Lead In (from Clay)": {
+      "main": [[{ "node": "Score Lead (Claude Haiku)", "type": "main", "index": 0 }]]
+    },
+    "Score Lead (Claude Haiku)": {
+      "main": [[{ "node": "Gate: score >= 60 & not disqualified", "type": "main", "index": 0 }]]
+    },
+    "Gate: score >= 60 & not disqualified": {
+      "main": [
+        [{ "node": "Research Hook (Claygent or fetch+Claude)", "type": "main", "index": 0 }],
+        [{ "node": "Save Rejected Lead", "type": "main", "index": 0 }]
+      ]
+    },
+    "Research Hook (Claygent or fetch+Claude)": {
+      "main": [[{ "node": "Retrieve Client KB (Supabase kb_search)", "type": "main", "index": 0 }]]
+    },
+    "Retrieve Client KB (Supabase kb_search)": {
+      "main": [[{ "node": "Draft Email (Claude Sonnet — writer)", "type": "main", "index": 0 }]]
+    },
+    "Draft Email (Claude Sonnet — writer)": {
+      "main": [[{ "node": "Deterministic Checks (blocklist, length)", "type": "main", "index": 0 }]]
+    },
+    "Deterministic Checks (blocklist, length)": {
+      "main": [[{ "node": "Reviewer Judge (Claude Opus)", "type": "main", "index": 0 }]]
+    },
+    "Reviewer Judge (Claude Opus)": {
+      "main": [[{ "node": "Gate: verdict", "type": "main", "index": 0 }]]
+    },
+    "Gate: verdict": {
+      "main": [
+        [{ "node": "Human Approval Gate (Wait)", "type": "main", "index": 0 }],
+        [{ "node": "Draft Email (Claude Sonnet — writer)", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Human Approval Gate (Wait)": {
+      "main": [[{ "node": "Push to Sequencer (Instantly)", "type": "main", "index": 0 }]]
+    },
+    "Push to Sequencer (Instantly)": {
+      "main": [[{ "node": "Log Event (Supabase)", "type": "main", "index": 0 }]]
+    },
+    "Reply In (from sequencer webhook)": {
+      "main": [[{ "node": "Classify Reply (Claude Haiku)", "type": "main", "index": 0 }]]
+    },
+    "Classify Reply (Claude Haiku)": {
+      "main": [[{ "node": "Route by Intent", "type": "main", "index": 0 }]]
+    },
+    "Route by Intent": {
+      "main": [
+        [{ "node": "Notify Operator (Slack)", "type": "main", "index": 0 }],
+        [{ "node": "Suppress Immediately", "type": "main", "index": 0 }],
+        [{ "node": "Notify Operator (Slack)", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

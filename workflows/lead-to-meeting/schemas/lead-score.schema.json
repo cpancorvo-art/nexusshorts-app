@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LeadScore",
+  "description": "Output contract for prompts/01-lead-scoring.md. Score 0-100; tier A >= 80, B 60-79, C < 60.",
+  "type": "object",
+  "properties": {
+    "score": {
+      "type": "integer",
+      "description": "Combined score 0-100: round(0.6 * fit_score + 0.4 * intent_score) unless the rubric overrides weights."
+    },
+    "fit_score": {
+      "type": "integer",
+      "description": "Company + persona match to the ICP rubric, 0-100."
+    },
+    "intent_score": {
+      "type": "integer",
+      "description": "Strength of buying signals (hiring, funding, growth, tech adoption), 0-100."
+    },
+    "tier": {
+      "type": "string",
+      "enum": ["A", "B", "C"]
+    },
+    "reasoning": {
+      "type": "string",
+      "description": "1-3 plain-language sentences naming the specific facts that drove the score."
+    },
+    "confidence": {
+      "type": "number",
+      "description": "0-1; lower when key fields were missing or stale."
+    },
+    "missing_data": {
+      "type": "array",
+      "description": "Rubric factors that could not be assessed from the lead record.",
+      "items": { "type": "string" }
+    },
+    "disqualified": {
+      "type": "boolean",
+      "description": "True if a hard disqualifier from the rubric matched."
+    },
+    "disqualifier_reason": {
+      "type": ["string", "null"],
+      "description": "Which disqualifier matched, or null."
+    }
+  },
+  "required": [
+    "score",
+    "fit_score",
+    "intent_score",
+    "tier",
+    "reasoning",
+    "confidence",
+    "missing_data",
+    "disqualified",
+    "disqualifier_reason"
+  ],
+  "additionalProperties": false
+}

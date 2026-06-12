@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReplyIntent",
+  "description": "Output contract for prompts/05-reply-classification.md. unsubscribe always wins over every other signal; unclear or confidence < 0.7 routes to the human queue.",
+  "type": "object",
+  "properties": {
+    "intent": {
+      "type": "string",
+      "enum": [
+        "interested",
+        "meeting_booked",
+        "referral",
+        "info_request",
+        "objection",
+        "not_interested",
+        "unsubscribe",
+        "out_of_office",
+        "bounce",
+        "unclear"
+      ]
+    },
+    "sentiment": {
+      "type": "string",
+      "enum": ["positive", "neutral", "negative"],
+      "description": "Tone, independent of intent."
+    },
+    "confidence": {
+      "type": "number",
+      "description": "0-1. Below 0.7 routes to a human."
+    },
+    "summary": {
+      "type": "string",
+      "description": "One sentence for the operator queue."
+    },
+    "return_date": {
+      "type": ["string", "null"],
+      "description": "YYYY-MM-DD when intent=out_of_office and a date is stated; null otherwise."
+    },
+    "referral_name": {
+      "type": ["string", "null"],
+      "description": "Referred person's name when intent=referral; null otherwise."
+    },
+    "referral_contact": {
+      "type": ["string", "null"],
+      "description": "Referred person's email/phone if present; null otherwise."
+    },
+    "objection_type": {
+      "type": ["string", "null"],
+      "enum": ["timing", "budget", "incumbent_vendor", "needs_proof", "authority", "other", null],
+      "description": "Set when intent=objection, for objection-typed nurture routing; null otherwise."
+    }
+  },
+  "required": [
+    "intent",
+    "sentiment",
+    "confidence",
+    "summary",
+    "return_date",
+    "referral_name",
+    "referral_contact",
+    "objection_type"
+  ],
+  "additionalProperties": false
+}

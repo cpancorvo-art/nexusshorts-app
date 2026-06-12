@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EmailDraft",
+  "description": "Output contract for prompts/03-email-draft.md. claims_used is the verification contract with the reviewer judge.",
+  "type": "object",
+  "properties": {
+    "subject": {
+      "type": "string",
+      "description": "Under 6 words, lowercase-casual, specific to the recipient, no spam-trigger words."
+    },
+    "body": {
+      "type": "string",
+      "description": "Under 120 words. No signature block, unsubscribe line, or postal address (the sender appends those)."
+    },
+    "opener_type": {
+      "type": "string",
+      "enum": ["research_hook", "segment_template"],
+      "description": "research_hook only when hook.found=true and hook_quality >= 4."
+    },
+    "claims_used": {
+      "type": "array",
+      "description": "Every factual claim in the draft, each mapped to the input field it came from. A claim in the body that is missing here is an automatic reviewer fail.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "claim": { "type": "string", "description": "The claim as it appears (or is paraphrased) in the draft." },
+          "source_field": { "type": "string", "description": "The input field or knowledge-base chunk id that supports it." }
+        },
+        "required": ["claim", "source_field"],
+        "additionalProperties": false
+      }
+    },
+    "word_count": {
+      "type": "integer",
+      "description": "Word count of body (also re-checked deterministically downstream)."
+    }
+  },
+  "required": ["subject", "body", "opener_type", "claims_used", "word_count"],
+  "additionalProperties": false
+}
